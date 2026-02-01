@@ -6,6 +6,7 @@ export interface User {
   role: Role;
   email: string;
   password?: string;
+  senha?: string; // Backend usa 'senha' em vez de 'password'
   pastorId?: number | null;
   discipuladorId?: number | null;
   contato?: string;

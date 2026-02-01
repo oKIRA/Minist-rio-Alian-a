@@ -8,12 +8,14 @@ import {
     Tooltip, Legend, ResponsiveContainer, LabelList 
 } from 'recharts';
 import { User as UserType } from '../../types';
+import { useLanguage } from '../../contexts/LanguageContext';
 
 interface DashboardChartsProps {
     data: UserType[];
 }
 
 export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
+    const { t } = useLanguage();
     const COLORS = ['#3b82f6', '#ec4899', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444'];
     
     const stats = useMemo(() => {
@@ -35,20 +37,20 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
 
         // Gender data (%)
         const genderData = [
-            { name: 'Homens', value: data.filter(p => p.sexo === 'M').length },
-            { name: 'Mulheres', value: data.filter(p => p.sexo === 'F').length }
+            { name: t.charts.men, value: data.filter(p => p.sexo === 'M').length },
+            { name: t.charts.women, value: data.filter(p => p.sexo === 'F').length }
         ];
 
         // Baptism data (%)
         const baptismData = [
-            { name: 'Batizados', value: data.filter(p => p.batizado).length },
-            { name: 'Não Batizados', value: data.filter(p => !p.batizado).length }
+            { name: t.dashboard.baptized, value: data.filter(p => p.batizado).length },
+            { name: t.dashboard.notBaptized, value: data.filter(p => !p.batizado).length }
         ];
 
         // UV data (%)
         const uvData = [
-            { name: 'Concluiu UV', value: data.filter(p => p.universidadeDaVida === 'Sim').length },
-            { name: 'Não Concluiu', value: data.filter(p => p.universidadeDaVida !== 'Sim').length }
+            { name: t.charts.completedUV, value: data.filter(p => p.universidadeDaVida === 'Sim').length },
+            { name: t.charts.notCompleted, value: data.filter(p => p.universidadeDaVida !== 'Sim').length }
         ];
 
         // CD data (%) - Percentage of total people in each level
@@ -61,7 +63,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
         return { avgAge, genderData, baptismData, uvData, cdData };
     }, [data]);
 
-    if (!stats) return <div className="p-10 text-center text-gray-500">Sem dados suficientes para gerar gráficos.</div>;
+    if (!stats) return <div className="p-10 text-center text-gray-500">{t.charts.noDataAvailable}</div>;
 
     const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
         const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
@@ -84,7 +86,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                         <Users size={32} />
                     </div>
                     <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Total Geral</p>
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{t.charts.totalGeneral}</p>
                         <h3 className="text-3xl font-black text-gray-900 dark:text-white">{data.length}</h3>
                     </div>
                 </div>
@@ -93,8 +95,8 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                         <Activity size={32} />
                     </div>
                     <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Idade Média</p>
-                        <h3 className="text-3xl font-black text-gray-900 dark:text-white">{stats.avgAge} anos</h3>
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{t.charts.averageAge}</p>
+                        <h3 className="text-3xl font-black text-gray-900 dark:text-white">{stats.avgAge} {t.users.years}</h3>
                     </div>
                 </div>
                 <div className="bg-white dark:bg-slate-800 p-6 rounded-[2rem] border border-gray-100 dark:border-slate-700 shadow-sm flex items-center gap-6">
@@ -102,9 +104,9 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                         <Heart size={32} />
                     </div>
                     <div>
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Atividade</p>
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{t.charts.activity}</p>
                         <h3 className="text-3xl font-black text-gray-900 dark:text-white">
-                            {((data.filter(p => p.atividade >= 4).length / (data.length || 1)) * 100).toFixed(0)}% Ativos
+                            {((data.filter(p => p.atividade >= 4).length / (data.length || 1)) * 100).toFixed(0)}% {t.charts.active}
                         </h3>
                     </div>
                 </div>
@@ -115,7 +117,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                 {/* Gender Percentage */}
                 <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] border border-gray-100 dark:border-slate-700 shadow-sm">
                     <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-6 flex items-center gap-2">
-                        <User className="text-blue-500" size={20} /> Distribuição de Gênero
+                        <User className="text-blue-500" size={20} /> {t.charts.genderDistribution}
                     </h3>
                     <div className="h-[300px] w-full">
                         <ResponsiveContainer width="100%" height="100%">
@@ -135,7 +137,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                     ))}
                                 </Pie>
-                                <Tooltip formatter={(value, name) => [`${value} pessoas`, name]} />
+                                <Tooltip formatter={(value, name) => [`${value} ${t.charts.people}`, name]} />
                                 <Legend verticalAlign="bottom" height={36}/>
                             </PieChart>
                         </ResponsiveContainer>
@@ -145,7 +147,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                 {/* Baptism Status */}
                 <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] border border-gray-100 dark:border-slate-700 shadow-sm">
                     <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-6 flex items-center gap-2">
-                        <Heart className="text-emerald-500" size={20} /> Status de Batismo
+                        <Heart className="text-emerald-500" size={20} /> {t.charts.baptismStatus}
                     </h3>
                     <div className="h-[300px] w-full">
                         <ResponsiveContainer width="100%" height="100%">
@@ -164,7 +166,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                                     <Cell fill="#10b981" />
                                     <Cell fill="#ef4444" />
                                 </Pie>
-                                <Tooltip formatter={(value) => [`${value} pessoas`]} />
+                                <Tooltip formatter={(value) => [`${value} ${t.charts.people}`]} />
                                 <Legend verticalAlign="bottom" height={36}/>
                             </PieChart>
                         </ResponsiveContainer>
@@ -174,7 +176,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                 {/* UV Completion */}
                 <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] border border-gray-100 dark:border-slate-700 shadow-sm">
                     <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-6 flex items-center gap-2">
-                        <GraduationCap className="text-amber-500" size={20} /> Conclusão Universidade da Vida
+                        <GraduationCap className="text-amber-500" size={20} /> {t.charts.uvCompletion}
                     </h3>
                     <div className="h-[300px] w-full">
                         <ResponsiveContainer width="100%" height="100%">
@@ -193,7 +195,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                                     <Cell fill="#f59e0b" />
                                     <Cell fill="#94a3b8" />
                                 </Pie>
-                                <Tooltip formatter={(value) => [`${value} pessoas`]} />
+                                <Tooltip formatter={(value) => [`${value} ${t.charts.people}`]} />
                                 <Legend verticalAlign="bottom" height={36}/>
                             </PieChart>
                         </ResponsiveContainer>
@@ -203,7 +205,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                 {/* CD Levels */}
                 <div className="bg-white dark:bg-slate-800 p-8 rounded-[2.5rem] border border-gray-100 dark:border-slate-700 shadow-sm">
                     <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-6 flex items-center gap-2">
-                        <Award className="text-indigo-500" size={20} /> Capacitação de Destino (%)
+                        <Award className="text-indigo-500" size={20} /> {t.charts.cdLevels}
                     </h3>
                     <div className="h-[300px] w-full">
                         <ResponsiveContainer width="100%" height="100%">
@@ -214,7 +216,7 @@ export const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                                 <Tooltip 
                                     contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}
                                     cursor={{ fill: 'rgba(59, 130, 246, 0.05)' }}
-                                    formatter={(value) => [`${value}%`, 'Conclusão']}
+                                    formatter={(value) => [`${value}%`, t.charts.completion]}
                                 />
                                 <Bar dataKey="percentage" fill="#6366f1" radius={[8, 8, 0, 0]} barSize={45}>
                                     <LabelList dataKey="percentage" position="top" formatter={(val: any) => `${val}%`} style={{ fontSize: '12px', fontWeight: 'bold', fill: '#6366f1' }} />
