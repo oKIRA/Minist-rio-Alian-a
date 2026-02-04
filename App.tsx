@@ -1,12 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
     Users, User, Plus, LogOut, LayoutDashboard, X, Edit, Network,
     Briefcase, Crown, BookOpen, Menu, Calendar, Activity, FolderOpen,
     ArrowLeft, Moon, Sun, ListFilter, Medal, ArrowDown, Lock, Eye, EyeOff,
-    Filter, Heart, Smile, Globe, BarChart2, Mail, Check, Copy, ArrowUpRight, Book, Sparkles, ShieldCheck, Award, GraduationCap, Search
+    Filter, Heart, Smile, Globe, BarChart2, Mail, Check, Copy, ArrowUpRight, Book, Sparkles, ShieldCheck, Award, GraduationCap, Search, Languages
 } from 'lucide-react';
 
-import { INITIAL_USERS, INITIAL_DISCIPLES } from './constants';
 import { User as UserType, Role, ViewState } from './types';
 import { Badge } from './components/ui/Badge';
 import { AvatarPlaceholder } from './components/ui/AvatarPlaceholder';
@@ -14,12 +13,16 @@ import { StatCard } from './components/ui/StatCard';
 import { DashboardCharts } from './components/dashboard/DashboardCharts';
 import { MobileUserCard } from './components/users/MobileUserCard';
 import { PreparacaoEstudo } from './components/study/PreparacaoEstudo';
+import { useAuth } from './contexts/AuthContext';
+import { useLanguage } from './contexts/LanguageContext';
+import { usuarioService, dashboardService } from './services/api';
 
 export default function App() {
-    const [user, setUser] = useState<UserType | null>(null);
+    const { user, login, logout, isLoading } = useAuth();
+    const { language, setLanguage, t } = useLanguage();
     const [view, setView] = useState<ViewState>('login');
-    const [usersDb, setUsersDb] = useState<UserType[]>(INITIAL_USERS);
-    const [disciplesDb, setDisciplesDb] = useState<UserType[]>(INITIAL_DISCIPLES);
+    const [usersDb, setUsersDb] = useState<UserType[]>([]);
+    const [disciplesDb, setDisciplesDb] = useState<UserType[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [editingItem, setEditingItem] = useState<UserType | null>(null);
     const [formType, setFormType] = useState<Role>('DISCIPULO');
@@ -172,28 +175,58 @@ export default function App() {
 
     const getSupervisorName = (id?: number | null) => {
         if (!id) return 'N/A';
-        const supervisor = usersDb.find(u => u.id === id) || INITIAL_USERS.find(u => u.id === id);
+        const supervisor = usersDb.find(u => u.id === id);
         return supervisor ? supervisor.name : 'N/A';
     };
 
-    const handleLoginSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        const foundUser = usersDb.find(u => u.email.toLowerCase() === loginEmail.toLowerCase() && u.password === loginPassword);
-        
-        if (foundUser) {
-            setUser(foundUser);
-            setView('dashboard');
-            setLoginError('');
-            setLoginEmail('');
-            setLoginPassword('');
-        } else {
-            setLoginError('E-mail ou senha incorretos. Tente novamente.');
+    // Carregar usuários da API
+    const loadUsuarios = async () => {
+        try {
+            const usuarios = await usuarioService.listar();
+            // Separar usuários em pastores/líderes e discípulos
+            const leaders = usuarios.filter(u => u.role !== 'DISCIPULO');
+            const disciples = usuarios.filter(u => u.role === 'DISCIPULO');
+            setUsersDb(leaders);
+            setDisciplesDb(disciples);
+        } catch (error) {
+            console.error('Erro ao carregar usuários:', error);
         }
     };
 
-    const handleDelete = (id: number, isUserTable: boolean) => { 
-        if (isUserTable) setUsersDb(prev => prev.filter(u => u.id !== id)); 
-        else setDisciplesDb(prev => prev.filter(d => d.id !== id)); 
+    // Carregar usuários quando o user estiver disponível
+    useEffect(() => {
+        if (user && !isLoading) {
+            loadUsuarios();
+            // Se o usuário está autenticado e a view ainda está em login, mudar para dashboard
+            if (view === 'login') {
+                setView('dashboard');
+            }
+        }
+    }, [user, isLoading]);
+
+    const handleLoginSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoginError('');
+        
+        try {
+            await login(loginEmail, loginPassword);
+            setLoginEmail('');
+            setLoginPassword('');
+        } catch (error: any) {
+            console.error('Erro no login:', error);
+            setLoginError(error.response?.data?.message || t.messages.loginError);
+        }
+    };
+
+    const handleDelete = async (id: number, isUserTable: boolean) => { 
+        try {
+            await usuarioService.deletar(id);
+            // Recarregar lista de usuários após deletar
+            await loadUsuarios();
+        } catch (error) {
+            console.error('Erro ao deletar usuário:', error);
+            alert('Erro ao deletar usuário. Tente novamente.');
+        }
     };
     
     const openForm = (type: string, item: UserType | null = null) => { 
@@ -203,20 +236,19 @@ export default function App() {
         setView('form'); 
     };
 
-    const handleSave = (e: React.FormEvent) => {
+    const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
         const formData = new FormData(e.target as HTMLFormElement);
         const data = Object.fromEntries(formData) as any;
 
-        const payload: UserType = {
-            id: editingItem ? editingItem.id : Date.now(),
+        const payload: Partial<UserType> = {
             name: data.name,
             contato: data.contato,
             nascimento: data.nascimento,
             sexo: data.sexo,
             ministerio: data.ministerio,
             email: data.email || (data.name.split(' ')[0] + '@alianca.com').toLowerCase(),
-            password: editingItem?.password || '123', 
+            senha: data.senha || '123',
             role: formType === 'DISCIPULO' ? 'DISCIPULO' : formType,
             pastorId: data.pastorId ? parseInt(data.pastorId) : null,
             discipuladorId: data.discipuladorId ? parseInt(data.discipuladorId) : null,
@@ -227,33 +259,29 @@ export default function App() {
             atividade: parseInt(data.atividade)
         };
 
-        const wasDisciple = editingItem && editingItem.role === 'DISCIPULO';
-        const becomingLeader = payload.role === 'DISCIPULADOR' || payload.role === 'PASTOR';
-        
-        const wasLeaderOrPastor = editingItem && (editingItem.role === 'DISCIPULADOR' || editingItem.role === 'PASTOR');
-        const becomingDisciple = payload.role === 'DISCIPULO';
+        try {
+            if (editingItem) {
+                // Atualizar usuário existente
+                await usuarioService.atualizar(editingItem.id, payload);
+            } else {
+                // Criar novo usuário
+                await usuarioService.criar(payload);
+            }
 
-        if (wasDisciple && becomingLeader) {
-            setDisciplesDb(prev => prev.filter(d => d.id !== payload.id));
-            setUsersDb(prev => [...prev, payload]);
-        } else if (wasLeaderOrPastor && becomingDisciple) {
-            setUsersDb(prev => prev.filter(u => u.id !== payload.id));
-            setDisciplesDb(prev => [...prev, payload]);
-        } else if (formType === 'PASTOR' || formType === 'DISCIPULADOR') {
-            if (editingItem) setUsersDb(prev => prev.map(u => u.id === payload.id ? { ...u, ...payload } : u));
-            else setUsersDb(prev => [...prev, payload]);
-        } else {
-            if (editingItem) setDisciplesDb(prev => prev.map(d => d.id === payload.id ? { ...d, ...payload } : d));
-            else setDisciplesDb(prev => [...prev, payload]);
+            // Recarregar lista de usuários após salvar
+            await loadUsuarios();
+            
+            if (formType === 'PASTOR') setView('pastors');
+            else if (formType === 'DISCIPULADOR') setView('leaders');
+            else setView('disciples');
+            setEditingItem(null);
+        } catch (error) {
+            console.error('Erro ao salvar usuário:', error);
+            alert(t.messages.saveError);
         }
-
-        if (formType === 'PASTOR') setView('pastors');
-        else if (formType === 'DISCIPULADOR') setView('leaders');
-        else setView('disciples');
-        setEditingItem(null);
     };
 
-    const getActivityLabel = (level: number) => { switch (level) { case 1: return 'Saiu da Igreja'; case 2: return 'Inativo'; case 3: return 'Neutro'; case 4: return 'Ativo'; case 5: return 'Extremamente Ativo'; default: return 'Neutro'; } };
+    const getActivityLabel = (level: number) => { switch (level) { case 1: return t.activityLabels.leftChurch; case 2: return t.activityLabels.inactive; case 3: return t.activityLabels.neutral; case 4: return t.activityLabels.active; case 5: return t.activityLabels.extremelyActive; default: return t.activityLabels.neutral; } };
 
     const renderForm = () => {
         if (!user) return null;
@@ -306,38 +334,88 @@ export default function App() {
                             </div>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-6">
-                            <div className="md:col-span-2"><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">Nome Completo</label><input name="name" defaultValue={editingItem?.name} required className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-sm md:text-base dark:text-white" placeholder="Ex: João da Silva" /></div>
-                            {(formType === 'PASTOR' || formType === 'DISCIPULADOR') && (<div className="md:col-span-2"><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">E-mail (Login de Acesso)</label><input name="email" defaultValue={editingItem?.email} type="email" required className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-sm md:text-base dark:text-white" placeholder="email@exemplo.com" /></div>)}
-                            <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">WhatsApp</label><input name="contato" defaultValue={editingItem?.contato} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-sm md:text-base dark:text-white" placeholder="(11) 99999-9999" /></div>
-                            <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">Nascimento</label><input type="date" name="nascimento" defaultValue={editingItem?.nascimento} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 text-sm md:text-base" /></div>
-                            <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">Sexo</label><select name="sexo" defaultValue={editingItem?.sexo || 'M'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="M">Masculino</option><option value="F">Feminino</option></select></div>
+                            <div className="md:col-span-2"><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{t.common.fullName}</label><input name="name" defaultValue={editingItem?.name} required className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-sm md:text-base dark:text-white" placeholder={t.messages.namePlaceholder} /></div>
+                            {(formType === 'PASTOR' || formType === 'DISCIPULADOR') && (<div className="md:col-span-2"><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{t.messages.emailLabel}</label><input name="email" defaultValue={editingItem?.email} type="email" required className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-sm md:text-base dark:text-white" placeholder={t.messages.emailPlaceholder} /></div>)}
+                            <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">WhatsApp</label><input name="contato" defaultValue={editingItem?.contato} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-sm md:text-base dark:text-white" placeholder={t.messages.phonePlaceholder} /></div>
+                            <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{t.form.birth}</label><input type="date" name="nascimento" defaultValue={editingItem?.nascimento} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 text-sm md:text-base" /></div>
+                            <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{t.form.gender}</label><select name="sexo" defaultValue={editingItem?.sexo || 'M'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="M">{t.form.male}</option><option value="F">{t.form.female}</option></select></div>
                         </div>
                         {(formType !== 'ADM' && (formType === 'DISCIPULADOR' || formType === 'DISCIPULO' || (formType === 'PASTOR' && user.role === 'ADM'))) && (
-                            <div className="mt-8 md:mt-10 pt-6 md:pt-8 border-t border-gray-50 dark:border-slate-700"><h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-6">Hierarquia</h3><div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{supervisorLabel}</label><select name={supervisorField} defaultValue={editingItem?.[supervisorField as keyof UserType] as string} required={formType !== 'PASTOR'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="">Selecione...</option>{supervisorOptions.map(op => <option key={op.id} value={op.id}>{op.name}</option>)}</select></div></div>
+                            <div className="mt-8 md:mt-10 pt-6 md:pt-8 border-t border-gray-50 dark:border-slate-700"><h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-6">{t.form.hierarchy}</h3><div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{supervisorLabel}</label><select name={supervisorField} defaultValue={editingItem?.[supervisorField as keyof UserType] as string} required={formType !== 'PASTOR'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="">{t.form.selectOption}</option>{supervisorOptions.map(op => <option key={op.id} value={op.id}>{op.name}</option>)}</select></div></div>
                         )}
                         <div className="mt-8 md:mt-10 pt-6 md:pt-8 border-t border-gray-50 dark:border-slate-700">
-                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-6">Vida Eclesiástica</h3>
+                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-6">{t.form.ecclesialLife}</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="md:col-span-2"><div className="flex justify-between items-center mb-2 ml-1"><label className="block text-sm font-bold text-gray-700 dark:text-gray-300">Nível de Atividade</label><span className="text-sm font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-3 py-1 rounded-full">{getActivityLabel(activityLevel)}</span></div><input type="range" name="atividade" min="1" max="5" step="1" value={activityLevel} onChange={(e) => setActivityLevel(parseInt(e.target.value))} className="w-full h-2 bg-gray-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600" /><div className="flex justify-between text-xs text-gray-400 mt-2 font-medium px-1"><span>Saiu</span><span>Ext. Ativo</span></div></div>
+                                <div className="md:col-span-2"><div className="flex justify-between items-center mb-2 ml-1"><label className="block text-sm font-bold text-gray-700 dark:text-gray-300">{t.form.activityLevel}</label><span className="text-sm font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-3 py-1 rounded-full">{getActivityLabel(activityLevel)}</span></div><input type="range" name="atividade" min="1" max="5" step="1" value={activityLevel} onChange={(e) => setActivityLevel(parseInt(e.target.value))} className="w-full h-2 bg-gray-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600" /><div className="flex justify-between text-xs text-gray-400 mt-2 font-medium px-1"><span>{t.form.left}</span><span>{t.form.extremelyActive}</span></div></div>
                                 
-                                <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">Batizado</label><select name="batizado_select" defaultValue={editingItem?.batizado ? 'Sim' : 'Não'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="Não">Não</option><option value="Sim">Sim</option></select></div>
-                                <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">Universidade da Vida</label><select name="universidade_vida" defaultValue={editingItem?.universidadeDaVida || 'Não'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="Não">Não</option><option value="Cursando">Cursando</option><option value="Sim">Sim</option></select></div>
-                                <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">Capacitação Destino</label><select name="capacitacao_destino" defaultValue={editingItem?.capacitacaoDestino || 'Não Iniciou'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="Não Iniciou">Não Iniciou</option><option value="Nível 1">Nível 1</option><option value="Nível 2">Nível 2</option><option value="Nível 3">Nível 3</option><option value="Concluído">Concluído</option></select></div>
-                                <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">Ministério</label><input name="ministerio" defaultValue={editingItem?.ministerio || (formType === 'DISCIPULO' ? '' : 'Liderança')} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-sm md:text-base dark:text-white" placeholder={formType === 'DISCIPULO' ? 'Ex: Louvor' : 'Ex: Liderança'} /></div>
+                                <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{t.form.baptized}</label><select name="batizado_select" defaultValue={editingItem?.batizado ? 'Sim' : 'Não'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="Não">{t.form.no}</option><option value="Sim">{t.form.yes}</option></select></div>
+                                <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{t.form.universityOfLife}</label><select name="universidade_vida" defaultValue={editingItem?.universidadeDaVida || 'Não'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="Não">{t.form.no}</option><option value="Cursando">{t.form.inProgress}</option><option value="Sim">{t.form.yes}</option></select></div>
+                                <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{t.form.destinationTraining}</label><select name="capacitacao_destino" defaultValue={editingItem?.capacitacaoDestino || 'Não Iniciou'} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-gray-600 dark:text-gray-300 cursor-pointer text-sm md:text-base"><option value="Não Iniciou">{t.form.notStarted}</option><option value="Nível 1">{t.form.level1}</option><option value="Nível 2">{t.form.level2}</option><option value="Nível 3">{t.form.level3}</option><option value="Concluído">{t.form.completed}</option></select></div>
+                                <div><label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 ml-1">{t.form.ministry}</label><input name="ministerio" defaultValue={editingItem?.ministerio || (formType === 'DISCIPULO' ? '' : t.form.leadership)} className="w-full px-5 py-3 md:py-4 bg-gray-50 dark:bg-slate-700 border-transparent focus:bg-white dark:focus:bg-slate-600 focus:border-blue-200 focus:ring-4 focus:ring-blue-50 dark:focus:ring-blue-900/30 rounded-2xl outline-none transition-all font-medium text-sm md:text-base dark:text-white" placeholder={formType === 'DISCIPULO' ? t.form.ministryExample : t.form.leadershipExample} /></div>
                             </div>
                         </div>
                     </div>
-                    <div className="flex justify-end gap-4 pb-10 md:pb-0"><button type="button" onClick={() => setView('dashboard')} className="px-6 md:px-8 py-3 md:py-4 rounded-2xl font-bold text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 transition text-sm md:text-base">Cancelar</button><button type="submit" className="px-8 md:px-10 py-3 md:py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold shadow-lg shadow-blue-200 dark:shadow-none transition transform active:scale-95 text-sm md:text-base">Salvar Registro</button></div>
+                    <div className="flex justify-end gap-4 pb-10 md:pb-0"><button type="button" onClick={() => setView('dashboard')} className="px-6 md:px-8 py-3 md:py-4 rounded-2xl font-bold text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 transition text-sm md:text-base">{t.form.cancel}</button><button type="submit" className="px-8 md:px-10 py-3 md:py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold shadow-lg shadow-blue-200 dark:shadow-none transition transform active:scale-95 text-sm md:text-base">{t.form.saveRecord}</button></div>
                 </form>
             </div>
         );
     };
 
     if (!user) {
+        if (isLoading) {
+            return (
+                <div className={darkMode ? "dark" : ""}>
+                    <div className="min-h-screen bg-white dark:bg-slate-900 flex items-center justify-center p-6 font-sans">
+                        <div className="text-center">
+                            <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                            <p className="text-gray-600 dark:text-gray-400 font-medium">{t.messages.loading}</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
         return (
             <div className={darkMode ? "dark" : ""}>
                 <div className="min-h-screen bg-white dark:bg-slate-900 flex items-center justify-center p-6 font-sans app-container">
-                    <div className="bg-white dark:bg-slate-800 p-8 md:p-12 rounded-[2rem] md:rounded-[2.5rem] shadow-2xl shadow-blue-900/10 dark:shadow-none w-full max-w-lg text-center border border-white dark:border-slate-700">
+                    <div className="bg-white dark:bg-slate-800 p-8 md:p-12 rounded-[2rem] md:rounded-[2.5rem] shadow-2xl shadow-blue-900/10 dark:shadow-none w-full max-w-lg text-center border border-white dark:border-slate-700 relative">
+                        {/* Seletor de idioma no login */}
+                        <div className="absolute top-6 right-6 flex gap-1.5">
+                            <button 
+                                onClick={() => setLanguage('pt')}
+                                className={`w-8 h-8 rounded-full overflow-hidden flex items-center justify-center transition-all transform hover:scale-110 ${
+                                    language === 'pt' 
+                                        ? 'ring-3 ring-blue-500 ring-offset-2 dark:ring-offset-slate-800 shadow-lg scale-110' 
+                                        : 'opacity-50 hover:opacity-100 grayscale hover:grayscale-0'
+                                }`}
+                                title="Português"
+                            >
+                                <img src="https://flagcdn.com/w40/br.png" alt="Brasil" className="w-full h-full object-cover" />
+                            </button>
+                            <button 
+                                onClick={() => setLanguage('es')}
+                                className={`w-8 h-8 rounded-full overflow-hidden flex items-center justify-center transition-all transform hover:scale-110 ${
+                                    language === 'es' 
+                                        ? 'ring-3 ring-blue-500 ring-offset-2 dark:ring-offset-slate-800 shadow-lg scale-110' 
+                                        : 'opacity-50 hover:opacity-100 grayscale hover:grayscale-0'
+                                }`}
+                                title="Español"
+                            >
+                                <img src="https://flagcdn.com/w40/es.png" alt="España" className="w-full h-full object-cover" />
+                            </button>
+                            <button 
+                                onClick={() => setLanguage('en')}
+                                className={`w-8 h-8 rounded-full overflow-hidden flex items-center justify-center transition-all transform hover:scale-110 ${
+                                    language === 'en' 
+                                        ? 'ring-3 ring-blue-500 ring-offset-2 dark:ring-offset-slate-800 shadow-lg scale-110' 
+                                        : 'opacity-50 hover:opacity-100 grayscale hover:grayscale-0'
+                                }`}
+                                title="English"
+                            >
+                                <img src="https://flagcdn.com/w40/us.png" alt="Estados Unidos" className="w-full h-full object-cover" />
+                            </button>
+                        </div>
+                        
                         <div className="w-24 h-24 md:w-32 md:h-32 mx-auto mb-6 md:mb-8 shadow-xl shadow-blue-500/30 rotate-3 transform hover:rotate-6 transition duration-500 rounded-[1.5rem] md:rounded-[2rem] overflow-hidden bg-white">
                             <img 
                                 src="https://graph.facebook.com/ministerioAliancaSP/picture?type=large" 
@@ -348,14 +426,14 @@ export default function App() {
                         </div>
                         
                         <div className="mb-8 md:mb-10 space-y-2">
-                            <h1 className="text-4xl md:text-5xl font-black text-gray-900 dark:text-white tracking-tighter">Aliança</h1>
-                            <p className="text-gray-400 font-medium text-sm md:text-base pt-2">Sistema de Gerenciamento de Discípulos</p>
+                            <h1 className="text-4xl md:text-5xl font-black text-gray-900 dark:text-white tracking-tighter">{t.login.title}</h1>
+                            <p className="text-gray-400 font-medium text-sm md:text-base pt-2">{t.login.subtitle}</p>
                         </div>
 
                         <form onSubmit={handleLoginSubmit} className="space-y-6">
                             <div className="space-y-4">
                                 <div>
-                                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-left ml-1">E-mail</label>
+                                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-left ml-1">{t.login.email}</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">
                                             <Mail size={20} />
@@ -371,7 +449,7 @@ export default function App() {
                                     </div>
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-left ml-1">Senha</label>
+                                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-left ml-1">{t.login.password}</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">
                                             <Lock size={20} />
@@ -402,24 +480,9 @@ export default function App() {
                             )}
 
                             <button type="submit" className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-lg shadow-lg shadow-blue-200 dark:shadow-none transition-all transform active:scale-95 flex items-center justify-center gap-2">
-                                Entrar no Sistema <ArrowUpRight size={20} />
+                                {t.login.button} <ArrowUpRight size={20} />
                             </button>
                         </form>
-
-                        <div className="mt-8 pt-8 border-t border-gray-100 dark:border-slate-700">
-                            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Credenciais de Teste (Senha: 123)</p>
-                            <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar text-left">
-                                {usersDb.map(u => (
-                                    <div key={u.id} className="flex justify-between items-center p-2 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-lg cursor-pointer group transition" onClick={() => { setLoginEmail(u.email); setLoginPassword('123'); }}>
-                                        <div>
-                                            <p className="text-xs font-bold text-gray-800 dark:text-white">{u.name} <span className="text-[10px] text-gray-400 font-normal">({u.role})</span></p>
-                                            <p className="text-[10px] text-gray-400 font-mono">{u.email}</p>
-                                        </div>
-                                        <Copy size={14} className="text-gray-300 group-hover:text-blue-500 transition" />
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -454,16 +517,56 @@ export default function App() {
                             <div><span className="text-2xl font-black tracking-tighter text-gray-900 dark:text-white block leading-none">Aliança</span><span className="text-xs font-bold text-gray-400 tracking-widest uppercase">Dashboard</span></div>
                         </div>
                         <nav className="space-y-3">
-                            <NavItem id="dashboard" icon={LayoutDashboard} label="Visão Geral" />
-                            <NavItem id="analytics" icon={BarChart2} label="Análise Visual" />
-                            {user.role === 'ADM' && <NavItem id="pastors" icon={Crown} label="Pastores" />}
-                            {(user.role === 'ADM' || user.role === 'PASTOR') && <NavItem id="leaders" icon={Briefcase} label="Líderes" />}
-                            <NavItem id="disciples" icon={Users} label="Discípulos" />
-                            <div className="pt-6 mt-6 border-t border-gray-100 dark:border-slate-700"><p className="px-6 text-xs font-bold text-gray-300 dark:text-gray-500 uppercase tracking-widest mb-4">Ferramentas</p><NavItem id="study_prep" icon={BookOpen} label="Preparar Estudo" color="amber" /></div>
+                            <NavItem id="dashboard" icon={LayoutDashboard} label={t.menu.dashboard} />
+                            <NavItem id="analytics" icon={BarChart2} label={t.menu.analytics} />
+                            {user.role === 'ADM' && <NavItem id="pastors" icon={Crown} label={t.menu.pastors} />}
+                            {(user.role === 'ADM' || user.role === 'PASTOR') && <NavItem id="leaders" icon={Briefcase} label={t.menu.leaders} />}
+                            <NavItem id="disciples" icon={Users} label={t.menu.disciples} />
+                            <div className="pt-6 mt-6 border-t border-gray-100 dark:border-slate-700"><p className="px-6 text-xs font-bold text-gray-300 dark:text-gray-500 uppercase tracking-widest mb-4">{t.menu.tools}</p><NavItem id="study_prep" icon={BookOpen} label={t.menu.study} color="amber" /></div>
                         </nav>
                         <div className="pt-6 border-t border-gray-100 dark:border-slate-700 mt-auto flex flex-col gap-2">
-                            <button onClick={() => setDarkMode(!darkMode)} className="flex items-center gap-3 text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 transition px-6 py-2 group">{darkMode ? <Sun size={20} /> : <Moon size={20} />}<span className="text-sm font-bold">{darkMode ? 'Modo Claro' : 'Modo Escuro'}</span></button>
-                            <button onClick={() => setUser(null)} className="flex items-center gap-3 text-gray-400 hover:text-red-500 transition px-6 py-2 group"><LogOut size={20} className="group-hover:-translate-x-1 transition-transform" /> <span className="text-sm font-bold">Sair da conta</span></button>
+                            <div className="relative px-6 py-3">
+                                <div className="flex gap-3 items-center">
+                                    <Languages size={16} className="text-gray-400" />
+                                    <div className="flex gap-1.5">
+                                        <button 
+                                            onClick={() => setLanguage('pt')}
+                                            className={`w-7 h-7 rounded-full overflow-hidden flex items-center justify-center transition-all transform hover:scale-110 ${
+                                                language === 'pt' 
+                                                    ? 'ring-2 ring-blue-500 shadow-md scale-105' 
+                                                    : 'opacity-40 hover:opacity-100 grayscale hover:grayscale-0'
+                                            }`}
+                                            title="Português"
+                                        >
+                                            <img src="https://flagcdn.com/w40/br.png" alt="Brasil" className="w-full h-full object-cover" />
+                                        </button>
+                                        <button 
+                                            onClick={() => setLanguage('es')}
+                                            className={`w-7 h-7 rounded-full overflow-hidden flex items-center justify-center transition-all transform hover:scale-110 ${
+                                                language === 'es' 
+                                                    ? 'ring-2 ring-blue-500 shadow-md scale-105' 
+                                                    : 'opacity-40 hover:opacity-100 grayscale hover:grayscale-0'
+                                            }`}
+                                            title="Español"
+                                        >
+                                            <img src="https://flagcdn.com/w40/es.png" alt="España" className="w-full h-full object-cover" />
+                                        </button>
+                                        <button 
+                                            onClick={() => setLanguage('en')}
+                                            className={`w-7 h-7 rounded-full overflow-hidden flex items-center justify-center transition-all transform hover:scale-110 ${
+                                                language === 'en' 
+                                                    ? 'ring-2 ring-blue-500 shadow-md scale-105' 
+                                                    : 'opacity-40 hover:opacity-100 grayscale hover:grayscale-0'
+                                            }`}
+                                            title="English"
+                                        >
+                                            <img src="https://flagcdn.com/w40/us.png" alt="Estados Unidos" className="w-full h-full object-cover" />
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={() => setDarkMode(!darkMode)} className="flex items-center gap-3 text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 transition px-6 py-2 group">{darkMode ? <Sun size={20} /> : <Moon size={20} />}<span className="text-sm font-bold">{darkMode ? t.menu.lightMode : t.menu.darkMode}</span></button>
+                            <button onClick={() => logout()} className="flex items-center gap-3 text-gray-400 hover:text-red-500 transition px-6 py-2 group"><LogOut size={20} className="group-hover:-translate-x-1 transition-transform" /> <span className="text-sm font-bold">{t.menu.logout}</span></button>
                         </div>
                     </div>
                 </aside>
@@ -472,7 +575,7 @@ export default function App() {
                     <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8 md:mb-12 print-hidden">
                         <div className="flex items-center gap-4 w-full md:w-auto">
                             <button onClick={() => setMobileMenuOpen(true)} className="p-3 bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-gray-100 dark:border-slate-700 lg:hidden text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-slate-700 active:scale-95 transition"><Menu /></button>
-                            <div><h1 className="text-2xl md:text-3xl font-black text-gray-900 dark:text-white tracking-tight">Olá, {user.name.split(' ')[0]} <span className="text-3xl md:text-4xl inline-block hover:animate-spin">👋</span></h1><p className="text-gray-400 font-medium text-sm md:text-base">Aqui está o resumo da sua rede hoje.</p></div>
+                            <div><h1 className="text-2xl md:text-3xl font-black text-gray-900 dark:text-white tracking-tight">{t.common.hello}, {user.name.split(' ')[0]} <span className="text-3xl md:text-4xl inline-block hover:animate-spin">👋</span></h1><p className="text-gray-400 font-medium text-sm md:text-base">{t.common.welcomeMessage}</p></div>
                         </div>
                         <div className="flex flex-col sm:flex-row items-center gap-3 md:gap-5 w-full md:w-auto bg-white dark:bg-slate-800 p-2 rounded-[1.5rem] shadow-sm border border-gray-100/50 dark:border-slate-700"><div className="flex items-center gap-3 px-4 py-2 w-full sm:w-auto justify-end sm:justify-start"><div className="text-right hidden sm:block"><p className="text-sm font-bold text-gray-800 dark:text-white leading-none">{user.name}</p><p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{user.role}</p></div><AvatarPlaceholder name={user.name} size="md" /></div></div>
                     </header>
@@ -481,22 +584,22 @@ export default function App() {
                         <div className="space-y-8 animate-in fade-in duration-500 pb-20">
                             <div className="flex justify-between items-end">
                                 {selectedLeader ? (
-                                    <div><button onClick={() => setSelectedLeader(null)} className="flex items-center gap-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 mb-2 transition"><ArrowLeft size={18} /> Voltar para lista</button><h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight flex items-center gap-3"><FolderOpen className="text-blue-600 dark:text-blue-400" size={28} /> Célula de {selectedLeader.name.split(' ')[0]}</h2><p className="text-gray-400 font-medium">Visualizando {filteredDisciples.length} discípulos.</p></div>
+                                    <div><button onClick={() => setSelectedLeader(null)} className="flex items-center gap-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 mb-2 transition"><ArrowLeft size={18} /> {t.common.backToList}</button><h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight flex items-center gap-3"><FolderOpen className="text-blue-600 dark:text-blue-400" size={28} /> {t.pages.leaders.cellOf} {selectedLeader.name.split(' ')[0]}</h2><p className="text-gray-400 font-medium">{t.common.viewing} {filteredDisciples.length} {t.pages.leaders.viewingDisciples}</p></div>
                                 ) : (
-                                    <div><h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Gestão de Líderes</h2><p className="text-gray-400 font-medium">Gerencie os líderes da sua rede.</p></div>
+                                    <div><h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">{t.pages.leaders.title}</h2><p className="text-gray-400 font-medium">{t.pages.leaders.subtitle}</p></div>
                                 )}
                                 {!selectedLeader && (user.role === 'ADM' || user.role === 'PASTOR') && (
-                                    <button onClick={() => openForm('DISCIPULADOR')} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl text-sm font-bold flex items-center justify-center gap-3 shadow-lg shadow-blue-200 dark:shadow-none transition transform active:scale-95 hover:-translate-y-1"><Plus size={20} /> Adicionar Novo</button>
+                                    <button onClick={() => openForm('DISCIPULADOR')} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl text-sm font-bold flex items-center justify-center gap-3 shadow-lg shadow-blue-200 dark:shadow-none transition transform active:scale-95 hover:-translate-y-1"><Plus size={20} /> {t.common.addNew}</button>
                                 )}
                             </div>
                             <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] border border-gray-100 dark:border-slate-700 shadow-xl overflow-hidden">
                                 <div className="hidden md:block overflow-x-auto">
                                     <table className="w-full text-left">
-                                        <thead className="bg-gray-50/50 dark:bg-slate-700/50 text-gray-400 text-xs uppercase font-bold tracking-widest"><tr><th className="px-8 py-6">Nome</th><th className="px-6 py-6">Posição</th><th className="px-6 py-6">Supervisão</th><th className="px-8 py-6 text-right">Ações</th></tr></thead>
+                                        <thead className="bg-gray-50/50 dark:bg-slate-700/50 text-gray-400 text-xs uppercase font-bold tracking-widest"><tr><th className="px-8 py-6">{t.users.name}</th><th className="px-6 py-6">{t.common.position}</th><th className="px-6 py-6">{t.common.supervision}</th><th className="px-8 py-6 text-right">{t.common.actions}</th></tr></thead>
                                         <tbody className="divide-y divide-gray-50 dark:divide-slate-700">
                                             {(selectedLeader ? filteredDisciples : filteredLeaders).map((item) => (
                                                 <tr key={item.id} className="group hover:bg-blue-50/30 dark:hover:bg-slate-700/50 transition">
-                                                    <td className="px-8 py-5"><div className="flex items-center gap-5"><AvatarPlaceholder name={item.name} size="md" /><div><p className="font-bold text-gray-800 dark:text-white text-sm">{item.name}</p><p className="text-xs text-gray-400">{item.email || 'Sem e-mail'}</p></div></div></td>
+                                                    <td className="px-8 py-5"><div className="flex items-center gap-5"><AvatarPlaceholder name={item.name} size="md" /><div><p className="font-bold text-gray-800 dark:text-white text-sm">{item.name}</p><p className="text-xs text-gray-400">{item.email || t.users.noEmail}</p></div></div></td>
                                                     <td className="px-6 py-5"><Badge type={item.role}>{item.role}</Badge></td>
                                                     <td className="px-6 py-5 text-sm text-gray-500 dark:text-gray-400">{getSupervisorName(selectedLeader ? item.discipuladorId : item.pastorId)}</td>
                                                     <td className="px-8 py-5 text-right"><div className="flex justify-end gap-2">{!selectedLeader && (<button onClick={() => setSelectedLeader(item)} className="p-2.5 text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition shadow-md hover:shadow-lg tooltip" title="Ver Célula"><FolderOpen size={18} /></button>)}<button onClick={() => openForm(item.role, item)} className="p-2.5 text-gray-400 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 bg-white dark:bg-slate-700 hover:shadow-md rounded-xl transition"><Edit size={18} /></button></div></td>
@@ -516,23 +619,23 @@ export default function App() {
                         <div className="space-y-8 animate-in fade-in duration-500 pb-20">
                              <div className="flex justify-between items-end">
                                 {selectedPastor ? (
-                                    <div><button onClick={() => setSelectedPastor(null)} className="flex items-center gap-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 mb-2 transition"><ArrowLeft size={18} /> Voltar para lista</button><h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight flex items-center gap-3"><FolderOpen className="text-blue-600 dark:text-blue-400" size={28} /> Rede de {selectedPastor.name.split(' ')[0]}</h2><p className="text-gray-400 font-medium">Visualizando {filteredDisciples.length} discípulos (Diretos e Indiretos).</p></div>
+                                    <div><button onClick={() => setSelectedPastor(null)} className="flex items-center gap-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 mb-2 transition"><ArrowLeft size={18} /> {t.common.backToList}</button><h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight flex items-center gap-3"><FolderOpen className="text-blue-600 dark:text-blue-400" size={28} /> {t.pages.pastors.networkOf} {selectedPastor.name.split(' ')[0]}</h2><p className="text-gray-400 font-medium">{t.common.viewing} {filteredDisciples.length} {t.pages.pastors.viewingDisciples}</p></div>
                                 ) : (
-                                    <div><h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Gestão de Pastores</h2><p className="text-gray-400 font-medium">Gerencie os pastores da sua rede.</p></div>
+                                    <div><h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">{t.pages.pastors.title}</h2><p className="text-gray-400 font-medium">{t.pages.pastors.subtitle}</p></div>
                                 )}
-                                {!selectedPastor && (user.role === 'ADM') && (<button onClick={() => openForm('PASTOR')} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl text-sm font-bold flex items-center justify-center gap-3 shadow-lg shadow-blue-200 dark:shadow-none transition transform active:scale-95 hover:-translate-y-1"><Plus size={20} /> Adicionar Novo</button>)}
+                                {!selectedPastor && (user.role === 'ADM') && (<button onClick={() => openForm('PASTOR')} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl text-sm font-bold flex items-center justify-center gap-3 shadow-lg shadow-blue-200 dark:shadow-none transition transform active:scale-95 hover:-translate-y-1"><Plus size={20} /> {t.common.addNew}</button>)}
                             </div>
                             <div className="bg-white dark:bg-slate-800 rounded-[2.5rem] border border-gray-100 dark:border-slate-700 shadow-xl overflow-hidden">
                                 <div className="hidden md:block overflow-x-auto">
                                     <table className="w-full text-left">
-                                        <thead className="bg-gray-50/50 dark:bg-slate-700/50 text-gray-400 text-xs uppercase font-bold tracking-widest"><tr><th className="px-8 py-6">Nome</th><th className="px-6 py-6">Posição</th><th className="px-6 py-6">Supervisão</th><th className="px-8 py-6 text-right">Ações</th></tr></thead>
+                                        <thead className="bg-gray-50/50 dark:bg-slate-700/50 text-gray-400 text-xs uppercase font-bold tracking-widest"><tr><th className="px-8 py-6">{t.users.name}</th><th className="px-6 py-6">{t.common.position}</th><th className="px-6 py-6">{t.common.supervision}</th><th className="px-8 py-6 text-right">{t.common.actions}</th></tr></thead>
                                         <tbody className="divide-y divide-gray-50 dark:divide-slate-700">
                                             {(selectedPastor ? filteredDisciples : filteredPastors).map((item) => (
                                                 <tr key={item.id} className="group hover:bg-blue-50/30 dark:hover:bg-slate-700/50 transition">
-                                                    <td className="px-8 py-5"><div className="flex items-center gap-5"><AvatarPlaceholder name={item.name} size="md" /><div><p className="font-bold text-gray-800 dark:text-white text-sm">{item.name}</p><p className="text-xs text-gray-400">{item.email || 'Sem e-mail'}</p></div></div></td>
+                                                    <td className="px-8 py-5"><div className="flex items-center gap-5"><AvatarPlaceholder name={item.name} size="md" /><div><p className="font-bold text-gray-800 dark:text-white text-sm">{item.name}</p><p className="text-xs text-gray-400">{item.email || t.users.noEmail}</p></div></div></td>
                                                     <td className="px-6 py-5"><Badge type={item.role}>{item.role}</Badge></td>
                                                     <td className="px-6 py-5 text-sm text-gray-500 dark:text-gray-400">{getSupervisorName(selectedPastor ? item.discipuladorId : item.pastorId)}</td>
-                                                    <td className="px-8 py-5 text-right"><div className="flex justify-end gap-2">{!selectedPastor && (<button onClick={() => setSelectedPastor(item)} className="p-2.5 text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition shadow-md hover:shadow-lg tooltip" title="Ver Rede Completa"><FolderOpen size={18} /></button>)}<button onClick={() => openForm(item.role, item)} className="p-2.5 text-gray-400 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 bg-white dark:bg-slate-700 hover:shadow-md rounded-xl transition"><Edit size={18} /></button></div></td>
+                                                    <td className="px-8 py-5 text-right"><div className="flex justify-end gap-2">{!selectedPastor && (<button onClick={() => setSelectedPastor(item)} className="p-2.5 text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition shadow-md hover:shadow-lg tooltip" title={t.tooltips.viewFullNetwork}><FolderOpen size={18} /></button>)}<button onClick={() => openForm(item.role, item)} className="p-2.5 text-gray-400 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 bg-white dark:bg-slate-700 hover:shadow-md rounded-xl transition"><Edit size={18} /></button></div></td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -549,11 +652,11 @@ export default function App() {
                         <div className="space-y-8 md:space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20 md:pb-0">
                             <div>
                                 <h3 className="text-base md:text-lg font-bold text-gray-800 dark:text-white mb-4 md:mb-5 flex items-center gap-2">
-                                    <span className="w-2 h-6 bg-blue-500 rounded-full inline-block"></span>Estatísticas Principais
+                                    <span className="w-2 h-6 bg-blue-500 rounded-full inline-block"></span>{t.dashboard.statistics}
                                 </h3>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-4 md:mb-6">
                                     <StatCard 
-                                        title="Discípulos G12" 
+                                        title={t.dashboard.g12Disciples} 
                                         value={getStatData('G12').length} 
                                         icon={Users} 
                                         colorBg="bg-blue-600" 
@@ -562,7 +665,7 @@ export default function App() {
                                         isSelected={selectedStat === 'G12'}
                                     />
                                     <StatCard 
-                                        title="Discípulos de Célula" 
+                                        title={t.dashboard.cellDisciples} 
                                         value={getStatData('CELULA').length} 
                                         icon={User} 
                                         colorBg="bg-emerald-500" 
@@ -571,7 +674,7 @@ export default function App() {
                                         isSelected={selectedStat === 'CELULA'}
                                     />
                                     <StatCard 
-                                        title="Discípulos 144" 
+                                        title={t.dashboard.disciples144} 
                                         value={getStatData('REAL_144').length} 
                                         icon={Network} 
                                         colorBg="bg-purple-600" 
@@ -580,7 +683,7 @@ export default function App() {
                                         isSelected={selectedStat === 'REAL_144'}
                                     />
                                     <StatCard 
-                                        title="Todos os Discípulos" 
+                                        title={t.dashboard.allDisciples} 
                                         value={getStatData('TODOS').length} 
                                         icon={Globe} 
                                         colorBg="bg-pink-600" 
@@ -591,7 +694,7 @@ export default function App() {
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
                                     <StatCard 
-                                        title="Batizados" 
+                                        title={t.dashboard.baptized} 
                                         value={networkDisciples.filter(d => d.batizado).length} 
                                         icon={Book} 
                                         colorBg="bg-violet-600" 
@@ -600,7 +703,7 @@ export default function App() {
                                         isSelected={selectedStat === 'BATIZADO'}
                                     />
                                     <StatCard 
-                                        title="Não Batizados" 
+                                        title={t.dashboard.notBaptized} 
                                         value={networkDisciples.filter(d => !d.batizado).length} 
                                         icon={User} 
                                         colorBg="bg-red-500" 
@@ -612,12 +715,12 @@ export default function App() {
                             </div>
                             <div>
                                 <h3 className="text-base md:text-lg font-bold text-gray-800 dark:text-white mb-4 md:mb-5 flex items-center gap-2">
-                                    <span className="w-2 h-6 bg-amber-500 rounded-full inline-block"></span>Trilha de Crescimento
+                                    <span className="w-2 h-6 bg-amber-500 rounded-full inline-block"></span>{t.dashboard.growthTrack}
                                 </h3>
                                 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6 mb-4 md:mb-6">
                                     <StatCard 
-                                        title="UV" 
+                                        title={t.dashboard.uv} 
                                         value={getCountByCourse('UV')} 
                                         icon={GraduationCap} 
                                         colorBg="bg-lime-400" 
@@ -626,7 +729,7 @@ export default function App() {
                                         isSelected={selectedStat === 'UV'}
                                     />
                                     <StatCard 
-                                        title="Não Iniciou UV" 
+                                        title={t.dashboard.notStartedUV} 
                                         value={networkDisciples.filter(d => d.universidadeDaVida === 'Não').length} 
                                         icon={Book} 
                                         colorBg="bg-red-500" 
@@ -638,7 +741,7 @@ export default function App() {
 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                                     <StatCard 
-                                        title="CD 1" 
+                                        title={t.dashboard.cd1} 
                                         value={getCountByCourse('CD1')} 
                                         icon={Award} 
                                         colorBg="bg-cyan-400" 
@@ -647,7 +750,7 @@ export default function App() {
                                         isSelected={selectedStat === 'CD1'}
                                     />
                                     <StatCard 
-                                        title="CD 2" 
+                                        title={t.dashboard.cd2} 
                                         value={getCountByCourse('CD2')} 
                                         icon={Award} 
                                         colorBg="bg-blue-600" 
@@ -656,7 +759,7 @@ export default function App() {
                                         isSelected={selectedStat === 'CD2'}
                                     />
                                     <StatCard 
-                                        title="CD 3" 
+                                        title={t.dashboard.cd3} 
                                         value={getCountByCourse('CD3')} 
                                         icon={Award} 
                                         colorBg="bg-blue-900" 
@@ -665,7 +768,7 @@ export default function App() {
                                         isSelected={selectedStat === 'CD3'}
                                     />
                                     <StatCard 
-                                        title="Não Iniciou CD" 
+                                        title={t.dashboard.notStartedCD} 
                                         value={networkDisciples.filter(d => d.capacitacaoDestino === 'Não Iniciou').length} 
                                         icon={Book} 
                                         colorBg="bg-red-500" 
@@ -679,14 +782,14 @@ export default function App() {
                             {/* Seção Filtros Pessoais */}
                             <div>
                                 <h3 className="text-base md:text-lg font-bold text-gray-800 dark:text-white mb-4 md:mb-5 flex items-center gap-2">
-                                    <span className="w-2 h-6 bg-purple-500 rounded-full inline-block"></span>Filtros Pessoais
+                                    <span className="w-2 h-6 bg-purple-500 rounded-full inline-block"></span>{t.dashboard.personalFilters}
                                 </h3>
                                 
                                 <div className="flex flex-col gap-6">
                                     {/* Gênero */}
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
                                         <StatCard 
-                                            title="Homens" 
+                                            title={t.dashboard.men} 
                                             value={getFilterCount('sexo', 'M')} 
                                             icon={User} 
                                             colorBg="bg-blue-500" 
@@ -695,7 +798,7 @@ export default function App() {
                                             isSelected={filterGender === 'M'}
                                         />
                                         <StatCard 
-                                            title="Mulheres" 
+                                            title={t.dashboard.women} 
                                             value={getFilterCount('sexo', 'F')} 
                                             icon={User} 
                                             colorBg="bg-pink-500" 
@@ -708,7 +811,7 @@ export default function App() {
                                     {/* Faixa Etária */}
                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-4 md:gap-6">
                                         <StatCard 
-                                            title="Crianças (0-12)" 
+                                            title={t.dashboard.children} 
                                             value={getFilterCount('age', '0-12')} 
                                             icon={Smile} 
                                             colorBg="bg-sky-400" 
@@ -717,7 +820,7 @@ export default function App() {
                                             isSelected={filterAge === '0-12'}
                                         />
                                         <StatCard 
-                                            title="Teens (13-17)" 
+                                            title={t.dashboard.teens} 
                                             value={getFilterCount('age', '13-17')} 
                                             icon={User} 
                                             colorBg="bg-orange-400" 
@@ -726,7 +829,7 @@ export default function App() {
                                             isSelected={filterAge === '13-17'}
                                         />
                                         <StatCard 
-                                            title="Jovens (18-25)" 
+                                            title={t.dashboard.young} 
                                             value={getFilterCount('age', '18-25')} 
                                             icon={Sparkles} 
                                             colorBg="bg-yellow-400" 
@@ -736,7 +839,7 @@ export default function App() {
                                             isSelected={filterAge === '18-25'}
                                         />
                                         <StatCard 
-                                            title="Adultos (26-40)" 
+                                            title={t.dashboard.adults} 
                                             value={getFilterCount('age', '26-40')} 
                                             icon={Briefcase} 
                                             colorBg="bg-indigo-500" 
@@ -745,7 +848,7 @@ export default function App() {
                                             isSelected={filterAge === '26-40'}
                                         />
                                         <StatCard 
-                                            title="Maduros (41-60)" 
+                                            title={t.dashboard.middleAge} 
                                             value={getFilterCount('age', '41-60')} 
                                             icon={ShieldCheck} 
                                             colorBg="bg-slate-500" 
@@ -754,7 +857,7 @@ export default function App() {
                                             isSelected={filterAge === '41-60'}
                                         />
                                         <StatCard 
-                                            title="Seniors (60+)" 
+                                            title={t.dashboard.seniors} 
                                             value={getFilterCount('age', '60+')} 
                                             icon={Sun} 
                                             colorBg="bg-purple-500" 
@@ -775,12 +878,12 @@ export default function App() {
                                         </div>
                                         <div>
                                             <h3 className="font-bold text-gray-800 dark:text-white text-base md:text-lg">
-                                                {selectedStat ? `Detalhes: ${selectedStat}` : 'Lista de Membros'}
+                                                {selectedStat ? `${t.dashboard.details}: ${selectedStat}` : t.dashboard.memberList}
                                             </h3>
                                             <p className="text-xs text-gray-500 dark:text-gray-400">
                                                 {shouldShowList 
-                                                    ? `Mostrando ${statDetailsList.length} pessoas com filtros aplicados` 
-                                                    : 'Clique em um card acima ou use filtros para ver os detalhes'}
+                                                    ? `${t.dashboard.showingPeople} ${statDetailsList.length} ${t.dashboard.peopleWithFilters}` 
+                                                    : t.dashboard.clickCardMessage}
                                             </p>
                                         </div>
                                     </div>
@@ -789,7 +892,7 @@ export default function App() {
                                             onClick={() => { setSelectedStat(null); setFilterGender(null); setFilterAge(null); }}
                                             className="text-sm text-gray-400 hover:text-red-500 transition-colors flex items-center gap-1 font-medium"
                                         >
-                                            <X size={16} /> Limpar Tudo
+                                            <X size={16} /> {t.dashboard.clearAll}
                                         </button>
                                     )}
                                 </div>
@@ -800,10 +903,10 @@ export default function App() {
                                             <table className="w-full text-left">
                                                 <thead className="bg-gray-50/50 dark:bg-slate-700/50 text-gray-400 text-xs uppercase font-bold tracking-widest sticky top-0 z-10 backdrop-blur-sm">
                                                     <tr>
-                                                        <th className="px-6 py-4">Nome</th>
-                                                        <th className="px-6 py-4">Posição</th>
-                                                        <th className="px-6 py-4">Supervisão</th>
-                                                        <th className="px-6 py-4 text-right">Ação</th>
+                                                        <th className="px-6 py-4">{t.users.name}</th>
+                                                        <th className="px-6 py-4">{t.common.position}</th>
+                                                        <th className="px-6 py-4">{t.common.supervision}</th>
+                                                        <th className="px-6 py-4 text-right">{t.common.action}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-gray-50 dark:divide-slate-700">
@@ -814,7 +917,7 @@ export default function App() {
                                                                     <AvatarPlaceholder name={item.name} size="sm" />
                                                                     <div>
                                                                         <span className="font-medium text-sm text-gray-700 dark:text-gray-200 block">{item.name}</span>
-                                                                        {item.nascimento && <span className="text-[10px] text-gray-400">{calculateAge(item.nascimento)} anos</span>}
+                                                                        {item.nascimento && <span className="text-[10px] text-gray-400">{calculateAge(item.nascimento)} {t.users.years}</span>}
                                                                     </div>
                                                                 </div>
                                                             </td>
@@ -834,13 +937,13 @@ export default function App() {
                                             </table>
                                         ) : (
                                             <div className="p-10 text-center text-gray-400">
-                                                <p>Nenhuma pessoa encontrada com os filtros selecionados.</p>
+                                                <p>{t.dashboard.noPersonFound}</p>
                                             </div>
                                         )
                                     ) : (
                                         <div className="p-12 flex flex-col items-center justify-center text-gray-400 opacity-60">
                                             <Activity size={48} className="mb-4 text-gray-300 dark:text-slate-600" />
-                                            <p className="text-sm font-medium">Selecione uma estatística ou filtro acima para visualizar a lista.</p>
+                                            <p className="text-sm font-medium">{t.dashboard.selectStatMessage}</p>
                                         </div>
                                     )}
                                 </div>
@@ -852,8 +955,8 @@ export default function App() {
                         <div className="space-y-8 animate-in fade-in duration-500 pb-20">
                             <div className="flex justify-between items-end mb-4">
                                 <div>
-                                    <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">Análise Visual</h2>
-                                    <p className="text-gray-400 font-medium">Indicadores e gráficos detalhados da sua rede.</p>
+                                    <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">{t.dashboard.visualAnalysis}</h2>
+                                    <p className="text-gray-400 font-medium">{t.dashboard.detailedIndicators}</p>
                                 </div>
                             </div>
                             <DashboardCharts data={networkDisciples} />
@@ -865,12 +968,12 @@ export default function App() {
                     {(view === 'disciples') && (
                         <div className="space-y-8 animate-in fade-in duration-500 pb-20">
                             <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-8 md:mb-10">
-                                <div><h2 className="text-2xl md:text-3xl font-black text-gray-900 dark:text-white tracking-tight">Gestão de Discípulos</h2><p className="text-gray-400 font-medium mt-2 text-sm md:text-base">Gerencie os membros da sua rede aqui.</p></div>
-                                {user.role === 'ADM' || user.role === 'PASTOR' || user.role === 'DISCIPULADOR' ? (<button onClick={() => openForm('DISCIPULO')} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl text-sm font-bold flex items-center justify-center gap-3 shadow-lg shadow-blue-200 transition transform active:scale-95 hover:-translate-y-1"><Plus size={20} /> Adicionar Novo</button>) : null}
+                                <div><h2 className="text-2xl md:text-3xl font-black text-gray-900 dark:text-white tracking-tight">{t.dashboard.discipleManagement}</h2><p className="text-gray-400 font-medium mt-2 text-sm md:text-base">{t.dashboard.manageNetwork}</p></div>
+                                {user.role === 'ADM' || user.role === 'PASTOR' || user.role === 'DISCIPULADOR' ? (<button onClick={() => openForm('DISCIPULO')} className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl text-sm font-bold flex items-center justify-center gap-3 shadow-lg shadow-blue-200 transition transform active:scale-95 hover:-translate-y-1"><Plus size={20} /> {t.common.addNew}</button>) : null}
                             </div>
                             <div className="bg-white dark:bg-slate-800 rounded-[1.5rem] md:rounded-[2.5rem] border border-gray-100 dark:border-slate-700 shadow-xl shadow-gray-100/50 dark:shadow-none overflow-hidden">
-                                <div className="p-4 md:p-6 border-b border-gray-100 dark:border-slate-700 flex flex-col md:flex-row items-center gap-4 bg-gray-50/30 dark:bg-slate-700/30"><div className="bg-white dark:bg-slate-700 flex items-center gap-3 px-5 py-4 rounded-2xl border border-gray-100 dark:border-slate-600 flex-1 w-full shadow-sm focus-within:ring-2 focus-within:ring-blue-100 transition-all"><Search size={20} className="text-gray-400" /><input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Filtrar por nome..." className="bg-transparent outline-none text-sm font-medium text-gray-700 dark:text-white w-full placeholder-gray-400" /></div></div>
-                                <div className="hidden md:block overflow-x-auto"><table className="w-full text-left"><thead className="bg-gray-50/50 dark:bg-slate-700/50 text-gray-400 text-xs uppercase font-bold tracking-widest"><tr><th className="px-8 py-6">Nome</th><th className="px-6 py-6">Posição</th><th className="px-6 py-6">Supervisão</th><th className="px-8 py-6 text-right">Ações</th></tr></thead><tbody className="divide-y divide-gray-50 dark:divide-slate-700">{filteredDisciples.map((item) => (<tr key={item.id} className="group hover:bg-blue-50/30 dark:hover:bg-slate-700/50 transition"><td className="px-8 py-5"><div className="flex items-center gap-5"><AvatarPlaceholder name={item.name} size="md" /><div><p className="font-bold text-gray-800 dark:text-white text-sm">{item.name}</p><p className="text-xs text-gray-400">{item.email || 'Sem e-mail'}</p></div></div></td><td className="px-6 py-5"><Badge type={item.role}>{item.role}</Badge></td><td className="px-6 py-5 text-sm text-gray-500 dark:text-gray-400">{getSupervisorName(item.discipuladorId || item.pastorId)}</td><td className="px-8 py-5 text-right"><div className="flex justify-end gap-2"><button onClick={() => openForm(item.role, item)} className="p-2.5 text-gray-400 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 bg-white dark:bg-slate-700 hover:shadow-md rounded-xl transition"><Edit size={18} /></button></div></td></tr>))}</tbody></table></div>
+                                <div className="p-4 md:p-6 border-b border-gray-100 dark:border-slate-700 flex flex-col md:flex-row items-center gap-4 bg-gray-50/30 dark:bg-slate-700/30"><div className="bg-white dark:bg-slate-700 flex items-center gap-3 px-5 py-4 rounded-2xl border border-gray-100 dark:border-slate-600 flex-1 w-full shadow-sm focus-within:ring-2 focus-within:ring-blue-100 transition-all"><Search size={20} className="text-gray-400" /><input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder={t.common.filterByName} className="bg-transparent outline-none text-sm font-medium text-gray-700 dark:text-white w-full placeholder-gray-400" /></div></div>
+                                <div className="hidden md:block overflow-x-auto"><table className="w-full text-left"><thead className="bg-gray-50/50 dark:bg-slate-700/50 text-gray-400 text-xs uppercase font-bold tracking-widest"><tr><th className="px-8 py-6">{t.users.name}</th><th className="px-6 py-6">{t.common.position}</th><th className="px-6 py-6">{t.common.supervision}</th><th className="px-8 py-6 text-right">{t.common.actions}</th></tr></thead><tbody className="divide-y divide-gray-50 dark:divide-slate-700">{filteredDisciples.map((item) => (<tr key={item.id} className="group hover:bg-blue-50/30 dark:hover:bg-slate-700/50 transition"><td className="px-8 py-5"><div className="flex items-center gap-5"><AvatarPlaceholder name={item.name} size="md" /><div><p className="font-bold text-gray-800 dark:text-white text-sm">{item.name}</p><p className="text-xs text-gray-400">{item.email || t.users.noEmail}</p></div></div></td><td className="px-6 py-5"><Badge type={item.role}>{item.role}</Badge></td><td className="px-6 py-5 text-sm text-gray-500 dark:text-gray-400">{getSupervisorName(item.discipuladorId || item.pastorId)}</td><td className="px-8 py-5 text-right"><div className="flex justify-end gap-2"><button onClick={() => openForm(item.role, item)} className="p-2.5 text-gray-400 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 bg-white dark:bg-slate-700 hover:shadow-md rounded-xl transition"><Edit size={18} /></button></div></td></tr>))}</tbody></table></div>
                                 <div className="md:hidden p-4 bg-gray-50/30 dark:bg-slate-900/30">{filteredDisciples.map((item) => (<MobileUserCard key={item.id} item={item} view={view} openForm={openForm} handleDelete={handleDelete} user={user} getSupervisorName={getSupervisorName} onOpenCell={() => { }} />))}</div>
                             </div>
                         </div>
