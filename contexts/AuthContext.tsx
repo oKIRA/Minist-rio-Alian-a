@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import { User } from '../types';
 import { authService } from '../services/api';
+import { auth, firebaseConfigError } from '../lib/firebase';
 
 interface AuthContextType {
   user: User | null;
@@ -22,35 +24,40 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Verificar se há um token salvo ao carregar o app
+  // Verificar autenticacao via Firebase ao carregar o app
   useEffect(() => {
-    const checkAuth = async () => {
-      const savedToken = localStorage.getItem('token');
-      
-      if (savedToken) {
-        setToken(savedToken);
-        try {
-          const response = await authService.me();
-          setUser(response.usuario);
-        } catch (error: any) {
-          console.error('Erro ao verificar autenticação:', error);
-          // Só limpar o token se realmente for erro de autenticação (401)
-          if (error.response?.status === 401) {
-            console.log('Token inválido, fazendo logout');
-            localStorage.removeItem('token');
-            setToken(null);
-            setUser(null);
-          } else {
-            // Para outros erros (rede, etc), manter o token e tentar novamente depois
-            console.log('Erro temporário, mantendo token para retry');
-          }
-        }
-      }
-      
+    if (!auth) {
+      console.error(firebaseConfigError || 'Firebase nao configurado.');
+      setToken(null);
+      setUser(null);
       setIsLoading(false);
-    };
+      return;
+    }
 
-    checkAuth();
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setToken(null);
+        setUser(null);
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const freshToken = await firebaseUser.getIdToken();
+        setToken(freshToken);
+
+        const response = await authService.me();
+        setUser(response.usuario);
+      } catch (error) {
+        console.error('Erro ao verificar autenticacao:', error);
+        setToken(null);
+        setUser(null);
+      } finally {
+        setIsLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const login = async (email: string, senha: string) => {
@@ -60,7 +67,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setUser(response.usuario);
     } catch (error) {
       console.error('Erro ao fazer login:', error);
-      throw error;
+      throw error instanceof Error
+        ? error
+        : new Error(firebaseConfigError || 'Erro ao fazer login.');
     }
   };
 
@@ -76,7 +85,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const refreshUser = async () => {
+    if (!auth) {
+      throw new Error(firebaseConfigError || 'Firebase nao configurado.');
+    }
+
     try {
+      const freshToken = await auth.currentUser?.getIdToken();
+      setToken(freshToken ?? null);
+
       const response = await authService.me();
       setUser(response.usuario);
     } catch (error) {

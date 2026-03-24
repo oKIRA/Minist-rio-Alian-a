@@ -1,6 +1,8 @@
 import { api } from '../axiosConfig';
 import { LoginResponse, AuthMeResponse } from './types';
 import { User } from '../../../types';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { auth, firebaseConfigError } from '../../../lib/firebase';
 
 // Adaptador para converter resposta da API para o tipo User
 const adaptUserFromAPI = (apiUser: any): User => {
@@ -49,16 +51,22 @@ export const authService = {
    * Realizar login
    */
   async login(email: string, senha: string): Promise<LoginResponse> {
-    const response = await api.post<any>('/auth/login', { email, senha });
-    
-    // Salvar token no localStorage
-    if (response.data.token) {
-      localStorage.setItem('token', response.data.token);
+    if (!auth) {
+      throw new Error(firebaseConfigError || 'Firebase nao configurado.');
     }
+
+    await signInWithEmailAndPassword(auth, email, senha);
+
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) {
+      throw new Error('Nao foi possivel obter o token do Firebase.');
+    }
+
+    const profile = await this.me();
     
     return {
-      token: response.data.token,
-      usuario: adaptUserFromAPI(response.data.usuario)
+      token,
+      usuario: profile.usuario
     };
   },
 
@@ -86,10 +94,10 @@ export const authService = {
    * Realizar logout
    */
   async logout(): Promise<void> {
-    try {
-      await api.post('/auth/logout');
-    } finally {
-      localStorage.removeItem('token');
+    if (!auth) {
+      return;
     }
+
+    await signOut(auth);
   },
 };
